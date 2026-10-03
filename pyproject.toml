@@ -36,6 +36,7 @@ vision = [
 [project.scripts]
 dji-ground = "dji_ground.mcp_server:main"
 dji-gateway = "dji_ground.gateway:main"
+dji-station = "scripts.run_station:run_station"
 
 [build-system]
 requires = ["hatchling"]

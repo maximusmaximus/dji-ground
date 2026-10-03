@@ -1,5 +1,6 @@
 """Real-time 3D reconstruction, point cloud generation, and timeline recording."""
 
+import json
 import math
 import os
 import time
@@ -190,20 +191,30 @@ class ReconstructionEngine3D:
 
         session_id = self.active_session_id
         end_time = time.time()
-        file_path = os.path.join(self.export_dir, f"{session_id}.ply")
-        self.export_ply(file_path)
+        ply_path = os.path.join(self.export_dir, f"{session_id}.ply")
+        obj_path = os.path.join(self.export_dir, f"{session_id}.obj")
+        gltf_path = os.path.join(self.export_dir, f"{session_id}.gltf")
+
+        self.export_ply(ply_path)
+        self.export_obj(obj_path)
+        self.export_gltf(gltf_path)
 
         meta = {
             "duration_s": round(end_time - self.session_start_time, 2),
             "keyframe_count": self.keyframe_count,
             "bounds": self.get_bounds(),
+            "export_files": {
+                "ply": ply_path,
+                "obj": obj_path,
+                "gltf": gltf_path,
+            },
         }
         self.db.save_3d_session(
             session_id=session_id,
             start_time=self.session_start_time,
             end_time=end_time,
             point_count=len(self.points),
-            file_path=file_path,
+            file_path=ply_path,
             resolution=self.resolution,
             metadata=meta,
         )
@@ -213,7 +224,9 @@ class ReconstructionEngine3D:
             "session_id": session_id,
             "point_count": len(self.points),
             "keyframe_count": self.keyframe_count,
-            "file_path": file_path,
+            "file_path": ply_path,
+            "obj_path": obj_path,
+            "gltf_path": gltf_path,
             "bounds": meta["bounds"],
         }
 
@@ -231,6 +244,42 @@ class ReconstructionEngine3D:
             f.write("property uchar blue\n")
             f.write("end_header\n")
             f.writelines(f"{p.x:.3f} {p.y:.3f} {p.z:.3f} {p.r} {p.g} {p.b}\n" for p in self.points)
+
+    def export_obj(self, output_path: str) -> None:
+        """Export point cloud and reconstructed vertices to Wavefront OBJ format."""
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write("# dji-ground 3D Reconstruction Model\n")
+            f.write(f"# Vertices: {len(self.points)}\n")
+            for p in self.points:
+                # OBJ format with vertex color extension: v x y z r g b (0.0-1.0)
+                r_norm = round(p.r / 255.0, 3)
+                g_norm = round(p.g / 255.0, 3)
+                b_norm = round(p.b / 255.0, 3)
+                f.write(f"v {p.x:.3f} {p.y:.3f} {p.z:.3f} {r_norm} {g_norm} {b_norm}\n")
+
+    def export_gltf(self, output_path: str) -> None:
+        """Export point cloud metadata and scene description to standard GLTF JSON."""
+        bounds = self.get_bounds()
+        pts_data = [{"pos": [p.x, p.y, p.z], "color": [p.r / 255.0, p.g / 255.0, p.b / 255.0]} for p in self.points[:5000]]
+        gltf_doc = {
+            "asset": {"version": "2.0", "generator": "dji-ground-3d-engine"},
+            "scene": 0,
+            "scenes": [{"name": "DefaultScene", "nodes": [0]}],
+            "nodes": [{"name": "ReconstructedPointCloud", "mesh": 0}],
+            "meshes": [
+                {
+                    "name": "DroneScanMesh",
+                    "primitives": [{"mode": 0, "attributes": {"POSITION": 0}}],
+                    "extras": {
+                        "point_count": len(self.points),
+                        "bounds": bounds,
+                        "sample_points": pts_data,
+                    },
+                }
+            ],
+        }
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(gltf_doc, f, indent=2)
 
     def get_bounds(self) -> dict[str, float]:
         """Compute bounding box of accumulated points."""

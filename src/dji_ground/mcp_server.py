@@ -18,7 +18,7 @@ from .config import Settings, get_settings
 from .db import SessionDB
 from .modeling_3d import ReconstructionEngine3D
 from .modes import ModeManager
-from .scene import FakeDetector, FakeVLMClient, ScenePipeline, VeniceVLMClient
+from .scene import FakeDetector, FakeVLMClient, ScenePipeline, VeniceVLMClient, YoloDetector
 from .screen import ScreenCapturer
 from .triggers import TriggerEngine
 from .video import VideoPipeline
@@ -75,7 +75,8 @@ def init_subsystems(enable_3d: bool | None = None) -> None:
     else:
         vlm_client = FakeVLMClient()
 
-    _scene = ScenePipeline(detector=FakeDetector(), vlm_client=vlm_client)
+    detector = YoloDetector() if _settings.enable_yolo else FakeDetector()
+    _scene = ScenePipeline(detector=detector, vlm_client=vlm_client)
     _triggers = TriggerEngine(_db)
     _authority = Authority(_bridge, _settings)
     _modes = ModeManager(_authority, _scene, _triggers)

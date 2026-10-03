@@ -8,6 +8,7 @@ import { SceneTranscript } from './components/SceneTranscript.tsx';
 import { ThreeDViewer } from './components/ThreeDViewer.tsx';
 import { TimelineScrubber } from './components/TimelineScrubber.tsx';
 import { EmergencyStopButton } from './components/EmergencyStopButton.tsx';
+import { GamepadController } from './components/GamepadController.tsx';
 
 export const App: React.FC = () => {
   const [telemetry, setTelemetry] = useState<TelemetryData | undefined>();
@@ -177,6 +178,10 @@ export const App: React.FC = () => {
       {/* Top HUD */}
       <div style={{ marginBottom: '16px' }}>
         <TelemetryHUD telemetry={telemetry} status={status} />
+        <GamepadController
+          isManualMode={status?.mode === 'manual_sidecar'}
+          onEmergencyStop={handleEmergencyStop}
+        />
       </div>
 
       {/* Main Grid: Left Video & AI, Right 3D Viewport */}

@@ -47,6 +47,21 @@ def test_3d_reconstruction_session_and_export(tmp_path):
         header = f.readline().strip()
         assert header == "ply"
 
+    # Verify OBJ export
+    obj_path = os.path.join(export_dir, f"{session_id}.obj")
+    assert os.path.exists(obj_path)
+    with open(obj_path, "r", encoding="utf-8") as f:
+        first_line = f.readline().strip()
+        assert "dji-ground 3D" in first_line
+
+    # Verify GLTF export
+    gltf_path = os.path.join(export_dir, f"{session_id}.gltf")
+    assert os.path.exists(gltf_path)
+    with open(gltf_path, "r", encoding="utf-8") as f:
+        content = f.read()
+        assert "asset" in content
+        assert "DroneScanMesh" in content
+
 
 def test_3d_timeline_scrubbing(tmp_path):
     """Test scrubbing timeline to specific time returns matching point slice and pose."""

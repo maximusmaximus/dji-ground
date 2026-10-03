@@ -311,7 +311,12 @@
                 ),
                 !activeSession
                   ? e('button', { className: 'btn btn-green', onClick: startScan }, 'Start 3D Scan')
-                  : e('button', { className: 'btn btn-stop', style: { padding: '6px 12px', fontSize: '12px' }, onClick: stopScan }, 'Stop & Export (.ply)')
+                  : e('div', { style: { display: 'flex', gap: '6px' } },
+                      e('button', { className: 'btn btn-stop', style: { padding: '6px 10px', fontSize: '11px' }, onClick: stopScan }, 'Stop Scan'),
+                      e('a', { href: `/api/3d_model/${activeSession}/download/ply`, className: 'btn btn-blue', style: { textDecoration: 'none', padding: '6px 8px', fontSize: '11px' }, download: true }, 'PLY'),
+                      e('a', { href: `/api/3d_model/${activeSession}/download/obj`, className: 'btn btn-gray', style: { textDecoration: 'none', padding: '6px 8px', fontSize: '11px' }, download: true }, 'OBJ'),
+                      e('a', { href: `/api/3d_model/${activeSession}/download/gltf`, className: 'btn btn-gray', style: { textDecoration: 'none', padding: '6px 8px', fontSize: '11px' }, download: true }, 'GLTF')
+                    )
               ),
               e('canvas', { ref: canvasRef, width: 600, height: 300, style: { width: '100%', height: '300px', display: 'block', borderRadius: '6px' } }),
               e('div', { style: { marginTop: '12px', display: 'flex', alignItems: 'center', gap: '12px' } },

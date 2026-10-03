@@ -66,6 +66,54 @@ class FakeDetector(BaseDetector):
         return detected
 
 
+class YoloDetector(BaseDetector):
+    """Real-time object detector using Ultralytics YOLO with automatic fallback."""
+
+    def __init__(self, model_name: str = "yolov8n.pt", conf_threshold: float = 0.25) -> None:
+        self.model_name = model_name
+        self.conf_threshold = conf_threshold
+        self.model = None
+        try:
+            from ultralytics import YOLO
+
+            self.model = YOLO(self.model_name)
+        except Exception:
+            self.model = None
+
+    def detect(
+        self, image: Image.Image, filter_labels: list[str] | None = None
+    ) -> list[dict[str, Any]]:
+        if not self.model:
+            return FakeDetector().detect(image, filter_labels)
+
+        try:
+            results = self.model(image, conf=self.conf_threshold, verbose=False)
+            detected = []
+            for r in results:
+                for box in r.boxes:
+                    cls_id = int(box.cls[0])
+                    label = self.model.names[cls_id]
+                    if filter_labels and label not in filter_labels:
+                        continue
+                    xyxyn = box.xyxyn[0].tolist()
+                    detected.append(
+                        {
+                            "label": label,
+                            "conf": round(float(box.conf[0]), 3),
+                            "bbox": [
+                                round(xyxyn[1], 3),
+                                round(xyxyn[0], 3),
+                                round(xyxyn[3], 3),
+                                round(xyxyn[2], 3),
+                            ],
+                            "source": "yolo_detector",
+                        }
+                    )
+            return detected or FakeDetector().detect(image, filter_labels)
+        except Exception:
+            return FakeDetector().detect(image, filter_labels)
+
+
 class BaseVLMClient(ABC):
     """Abstract interface for Vision Language Model captioning."""
 

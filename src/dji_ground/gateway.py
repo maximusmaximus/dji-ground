@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -191,6 +191,31 @@ def api_stop_3d_scan():
 @app.get("/api/3d_model/{session_id}")
 def api_get_3d_model(session_id: str):
     return mcp_server.get_3d_model(session_id)
+
+
+@app.get("/api/3d_model/{session_id}/download/{file_format}")
+def api_download_3d_model(session_id: str, file_format: str):
+    """Download 3D model file in PLY, OBJ, or GLTF format."""
+    clean_fmt = file_format.lower().strip().replace(".", "")
+    if clean_fmt not in ("ply", "obj", "gltf"):
+        raise HTTPException(status_code=400, detail="Supported formats are: ply, obj, gltf")
+
+    export_dir = mcp_server._settings.model_3d_export_dir
+    target_file = os.path.join(export_dir, f"{session_id}.{clean_fmt}")
+
+    if not os.path.exists(target_file):
+        raise HTTPException(status_code=404, detail=f"Model file {session_id}.{clean_fmt} not found")
+
+    media_types = {
+        "ply": "application/octet-stream",
+        "obj": "text/plain",
+        "gltf": "model/gltf+json",
+    }
+    return FileResponse(
+        target_file,
+        media_type=media_types.get(clean_fmt, "application/octet-stream"),
+        filename=f"{session_id}.{clean_fmt}",
+    )
 
 
 @app.get("/api/3d_timeline/{session_id}")

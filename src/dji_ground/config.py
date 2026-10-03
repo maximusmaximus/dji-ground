@@ -49,6 +49,9 @@ class Settings(BaseSettings):
         default=30, description="Server-minted motion token TTL in seconds"
     )
 
+    # Detector
+    enable_yolo: bool = Field(default=False, description="Enable YOLO object detector")
+
     # 3D Modeling & Live Reconstruction
     enable_3d_modeling: bool = Field(
         default=False, description="Enable real-time 3D scanning engine"
