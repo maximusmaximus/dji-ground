@@ -5,7 +5,6 @@ import asyncio
 import base64
 import io
 import os
-import time
 from typing import Any
 
 from fastmcp import FastMCP
@@ -18,6 +17,7 @@ from .config import Settings, get_settings
 from .db import SessionDB
 from .modeling_3d import ReconstructionEngine3D
 from .modes import ModeManager
+from .safety_gates import PLACEHOLDER_AGE_MS, placeholder_frame, scan_without_confirm
 from .scene import FakeDetector, FakeVLMClient, ScenePipeline, VeniceVLMClient, YoloDetector
 from .screen import ScreenCapturer
 from .triggers import TriggerEngine
@@ -172,12 +172,7 @@ async def get_latest_frame() -> dict[str, Any]:
         buf = io.BytesIO()
         img.save(buf, format="JPEG")
         b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-        return {
-            "frame_id": 0,
-            "timestamp_ms": time.time() * 1000.0,
-            "age_ms": 0.0,
-            "image_b64": b64,
-        }
+        return placeholder_frame(b64)
 
     buf = io.BytesIO()
     frame.image.save(buf, format="JPEG", quality=80)
@@ -219,10 +214,12 @@ async def describe_scene(prompt: str = "") -> dict[str, Any]:
         fixture_path = "fixtures/sample_frame.jpg"
         if os.path.exists(fixture_path):
             img = Image.open(fixture_path)
+            frame_id = 1
+            age_ms = 15.0
         else:
             img = Image.new("RGB", (640, 480), color=(180, 200, 220))
-        frame_id = 1
-        age_ms = 15.0
+            frame_id = 0
+            age_ms = PLACEHOLDER_AGE_MS
     else:
         img = frame.image
         frame_id = frame.frame_id
@@ -398,8 +395,14 @@ def get_3d_model(session_id: str = "") -> dict[str, Any]:
 
 
 @mcp.tool()
-async def scan_target_object(target_label: str, radius_m: float = 3.0) -> dict[str, Any]:
-    """Autonomous high-level task: Find object X in viewport, orbit POI, and generate 3D model."""
+async def scan_target_object(
+    target_label: str, radius_m: float = 3.0, confirm_token: str | None = None
+) -> dict[str, Any]:
+    """Autonomous high-level task: Find object X in viewport, orbit POI, and generate 3D model.
+
+    Safety: Without confirm_token from operator arm_motion('orbit'), this tool proposes
+    the scan and matched bounding box but refuses to self-arm motion.
+    """
     init_subsystems()
     # 1. Search viewport for target
     objs = await detect_objects(labels=[target_label])
@@ -408,6 +411,9 @@ async def scan_target_object(target_label: str, radius_m: float = 3.0) -> dict[s
         if o["label"].lower() == target_label.lower():
             matched = o
             break
+
+    if not confirm_token:
+        return scan_without_confirm(target_label, matched)
 
     if not matched:
         return {
@@ -420,18 +426,15 @@ async def scan_target_object(target_label: str, radius_m: float = 3.0) -> dict[s
     # 2. Start 3D scan session
     session_id = _modeler.start_session(target_label=target_label, resolution="high")
 
-    # 3. Mint token for orbit mode
-    token_obj = _authority.arm_motion("orbit")
-
-    # 4. Engage orbit mode around target
+    # 3. Engage orbit mode around target using operator confirm_token
     await _authority.set_mode(
         "orbit",
-        token=token_obj.token,
+        token=confirm_token,
         params={"target": target_label, "bbox": matched["bbox"], "radius": radius_m},
         controller_cb=_modes.get_orbit_controller(radius=radius_m),
     )
 
-    # 5. Capture initial frame
+    # 4. Capture initial frame
     desc = await describe_scene()
 
     return {

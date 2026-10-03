@@ -1,7 +1,6 @@
 """Regression: geofence must not treat velocity as position."""
 
 from dji_ground.authority import Authority
-from dji_ground.bridge.fake import FakeBridge
 
 
 def test_velocity_is_not_a_geofence_point(running_authority: Authority):

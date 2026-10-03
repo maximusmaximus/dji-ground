@@ -25,9 +25,19 @@ async def run_scan_mission(target_label: str = "red_cone") -> None:
     await mcp_server.takeoff(tok["token"])
 
     # High-level tool: scan_target_object
-    print(f"[3D SCAN MISSION] Calling scan_target_object('{target_label}')...")
-    res = await mcp_server.scan_target_object(target_label, radius_m=3.0)
-    print(f"Scan initiation result: {res}")
+    print(f"[3D SCAN MISSION] Calling scan_target_object('{target_label}') without token (proposal)...")
+    proposal = await mcp_server.scan_target_object(target_label, radius_m=3.0)
+    print(f"Scan proposal result: {proposal}")
+
+    if proposal.get("status") == "requires_arm":
+        print("[3D SCAN MISSION] Operator arming motion for orbit...")
+        arm_tok = mcp_server.arm_motion("orbit")
+        res = await mcp_server.scan_target_object(
+            target_label, radius_m=3.0, confirm_token=arm_tok["token"]
+        )
+        print(f"Scan active result: {res}")
+    else:
+        res = proposal
 
     # Orbit and accumulate for 3 seconds
     print("[3D SCAN MISSION] Orbiting target and accumulating 3D point cloud...")
