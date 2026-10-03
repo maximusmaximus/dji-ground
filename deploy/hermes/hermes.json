@@ -1,0 +1,25 @@
+{
+  "name": "dji-flight-agent",
+  "model": "llama-3.3-70b",
+  "provider": {
+    "name": "venice",
+    "base_url": "https://api.venice.ai/api/v1",
+    "api_key_env": "VENICE_API_KEY"
+  },
+  "mcp_servers": {
+    "dji-ground": {
+      "command": "python",
+      "args": [
+        "-m",
+        "dji_ground.mcp_server",
+        "--enable-3d-modeling"
+      ],
+      "env": {
+        "DJI_ENABLE_3D_MODELING": "true",
+        "PYTHONPATH": "src"
+      }
+    }
+  },
+  "soul": "deploy/hermes/SOUL.md",
+  "skills_dir": "deploy/hermes/skills"
+}

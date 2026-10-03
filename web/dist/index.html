@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DJI Ground Station | Flight Authority & 3D Scanner</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background-color: #0d1117;
+      color: #c9d1d9;
+      padding: 16px;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #30363d;
+      padding-bottom: 12px;
+      margin-bottom: 16px;
+    }
+    .hud-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+      gap: 10px;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 16px;
+    }
+    .hud-item .title { font-size: 11px; color: #8b949e; text-transform: uppercase; }
+    .hud-item .val { font-size: 14px; font-weight: bold; margin-top: 2px; }
+    .main-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    .panel {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .panel h3 { font-size: 13px; color: #8b949e; text-transform: uppercase; margin-bottom: 12px; }
+    .btn {
+      padding: 8px 14px;
+      border: none;
+      border-radius: 6px;
+      font-weight: bold;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .btn-stop {
+      background-color: #da3633;
+      color: #fff;
+      font-size: 15px;
+      padding: 14px 24px;
+      border: 2px solid #f85149;
+      box-shadow: 0 4px 12px rgba(218, 54, 51, 0.4);
+    }
+    .btn-green { background: #238636; color: #fff; }
+    .btn-blue { background: #1f6feb; color: #fff; }
+    .btn-gray { background: #30363d; color: #c9d1d9; }
+    .mode-btn {
+      background: #21262d;
+      border: 1px solid #30363d;
+      color: #fff;
+      padding: 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      text-align: left;
+    }
+    .mode-btn.active { background: #1f6feb; border-color: #388bfd; }
+    input, select {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      color: #fff;
+      padding: 6px 10px;
+      border-radius: 4px;
+    }
+  </style>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script>
+    const e = React.createElement;
+    const { useState, useEffect, useRef } = React;
+
+    function App() {
+      const [status, setStatus] = useState({
+        state: 'DISARMED', mode: 'disarmed', battery_percent: 100,
+        altitude_agl: 0.0, is_flying: false, watchdog_ok: true,
+        video_fresh: true, video_age_ms: 15, obstacle_detected: false
+      });
+      const [scene, setScene] = useState({ caption: 'Awaiting scene description...', objects: [] });
+      const [triggers, setTriggers] = useState([]);
+      const [points, setPoints] = useState([]);
+      const [activeSession, setActiveSession] = useState(null);
+      const [scrubSec, setScrubSec] = useState(0);
+
+      const canvasRef = useRef(null);
+      const [rotX, setRotX] = useState(25);
+      const [rotY, setRotY] = useState(-35);
+
+      // WebSocket connection
+      useEffect(() => {
+        let ws;
+        const connect = () => {
+          const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+          ws = new WebSocket(`${proto}//${window.location.host}/ws/telemetry`);
+          ws.onmessage = (evt) => {
+            try {
+              const data = JSON.parse(evt.data);
+              if (data.status) setStatus(data.status);
+            } catch (err) {}
+          };
+          ws.onclose = () => setTimeout(connect, 1500);
+        };
+        connect();
+        return () => ws && ws.close();
+      }, []);
+
+      const refreshScene = async () => {
+        try {
+          const res = await fetch('/api/describe_scene');
+          if (res.ok) setScene(await res.json());
+        } catch (e) {}
+      };
+
+      const loadTriggers = async () => {
+        try {
+          const res = await fetch('/api/triggers');
+          if (res.ok) setTriggers(await res.json());
+        } catch (e) {}
+      };
+
+      useEffect(() => {
+        refreshScene();
+        loadTriggers();
+      }, []);
+
+      const emergencyStop = async () => {
+        await fetch('/api/emergency_stop', { method: 'POST' });
+      };
+
+      const armMotion = async (mode) => {
+        const res = await fetch('/api/arm_motion', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode })
+        });
+        const data = await res.json();
+        return data.token;
+      };
+
+      const takeoff = async () => {
+        const token = await armMotion('takeoff');
+        await fetch('/api/takeoff', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token })
+        });
+      };
+
+      const land = async () => fetch('/api/land', { method: 'POST' });
+      const rth = async () => fetch('/api/rth', { method: 'POST' });
+      const releaseToRc = async () => fetch('/api/release_to_rc', { method: 'POST' });
+
+      const setFlightMode = async (mode) => {
+        let token = null;
+        if (['follow', 'orbit', 'indoor_grid', 'outdoor_box', 'manual_sidecar'].includes(mode)) {
+          token = await armMotion(mode);
+        }
+        await fetch('/api/set_mode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode, token })
+        });
+      };
+
+      const startScan = async () => {
+        const res = await fetch('/api/3d_scan/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ resolution: 'high' })
+        });
+        const data = await res.json();
+        setActiveSession(data.session_id);
+      };
+
+      const stopScan = async () => {
+        await fetch('/api/3d_scan/stop', { method: 'POST' });
+        setActiveSession(null);
+      };
+
+      // 3D Canvas Projection
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width;
+        const h = canvas.height;
+        ctx.fillStyle = '#090d13';
+        ctx.fillRect(0, 0, w, h);
+
+        const radX = (rotX * Math.PI) / 180;
+        const radY = (rotY * Math.PI) / 180;
+        const project = (x, y, z) => {
+          const x1 = x * Math.cos(radY) - y * Math.sin(radY);
+          const y1 = x * Math.sin(radY) + y * Math.cos(radY);
+          const x2 = x1;
+          const y2 = y1 * Math.cos(radX) - z * Math.sin(radX);
+          const z2 = y1 * Math.sin(radX) + z * Math.cos(radX);
+          const scale = (w / 2) / 15;
+          return { sx: w / 2 + x2 * scale, sy: h / 2 - z2 * scale + y2 * (scale * 0.25) };
+        };
+
+        // Grid
+        ctx.strokeStyle = '#1b222d';
+        ctx.lineWidth = 1;
+        for (let g = -10; g <= 10; g += 2) {
+          const p1 = project(g, -10, 0), p2 = project(g, 10, 0);
+          ctx.beginPath(); ctx.moveTo(p1.sx, p1.sy); ctx.lineTo(p2.sx, p2.sy); ctx.stroke();
+          const p3 = project(-10, g, 0), p4 = project(10, g, 0);
+          ctx.beginPath(); ctx.moveTo(p3.sx, p3.sy); ctx.lineTo(p4.sx, p4.sy); ctx.stroke();
+        }
+
+        // Points
+        points.forEach(pt => {
+          const p = project(pt.x, pt.y, pt.z);
+          ctx.fillStyle = `rgb(${pt.r}, ${pt.g}, ${pt.b})`;
+          ctx.fillRect(p.sx - 1, p.sy - 1, 3, 3);
+        });
+
+        // Drone
+        const dp = project(status.sticks?.roll || 0, status.sticks?.pitch || 0, status.altitude_agl || 0);
+        ctx.fillStyle = '#ffcc00';
+        ctx.beginPath(); ctx.arc(dp.sx, dp.sy, 5, 0, Math.PI * 2); ctx.fill();
+      }, [points, rotX, rotY, status]);
+
+      return e('div', { style: { maxWidth: '1440px', margin: '0 auto' } },
+        // Header
+        e('header', null,
+          e('div', null,
+            e('h1', { style: { fontSize: '20px', color: '#f0f6fc' } }, 'DJI Ground Station (Hermes FastMCP)'),
+            e('div', { style: { fontSize: '12px', color: '#8b949e' } }, 'Single Flight Authority | 3D Point Cloud Scanner | Pilot in Command')
+          ),
+          e('button', { className: 'btn btn-stop', onClick: emergencyStop }, '🛑 EMERGENCY STOP')
+        ),
+
+        // HUD
+        e('div', { className: 'hud-grid' },
+          e('div', { className: 'hud-item' },
+            e('div', { className: 'title' }, 'State'),
+            e('div', { className: 'val', style: { color: status.state.includes('EMERGENCY') ? '#f85149' : '#58a6ff' } }, status.state)
+          ),
+          e('div', { className: 'hud-item' },
+            e('div', { className: 'title' }, 'Mode'),
+            e('div', { className: 'val', style: { color: '#7ee787' } }, status.mode)
+          ),
+          e('div', { className: 'hud-item' },
+            e('div', { className: 'title' }, 'Altitude AGL'),
+            e('div', { className: 'val' }, `${status.altitude_agl} m`)
+          ),
+          e('div', { className: 'hud-item' },
+            e('div', { className: 'title' }, 'Battery'),
+            e('div', { className: 'val', style: { color: status.battery_percent < 25 ? '#f85149' : '#3fb950' } }, `${status.battery_percent}%`)
+          ),
+          e('div', { className: 'hud-item' },
+            e('div', { className: 'title' }, 'Watchdog (500ms)'),
+            e('div', { className: 'val', style: { color: status.watchdog_ok ? '#3fb950' : '#f85149' } }, status.watchdog_ok ? 'PASS' : 'TIMEOUT')
+          ),
+          e('div', { className: 'hud-item' },
+            e('div', { className: 'title' }, 'Video Stream'),
+            e('div', { className: 'val', style: { color: status.video_fresh ? '#3fb950' : '#f85149' } }, `${status.video_age_ms} ms`)
+          )
+        ),
+
+        // Middle Grid
+        e('div', { className: 'main-grid' },
+          // Left: Video & Scene
+          e('div', { style: { display: 'flex', flexDirection: 'column', gap: '16px' } },
+            e('div', { style: { height: '320px', background: '#000', borderRadius: '8px', overflow: 'hidden' } },
+              e('img', { src: '/video/mjpeg', style: { width: '100%', height: '100%', objectFit: 'contain' } })
+            ),
+            e('div', { className: 'panel' },
+              e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' } },
+                e('h3', null, 'Visual Scene Description'),
+                e('button', { className: 'btn btn-gray', onClick: refreshScene }, 'Describe Now')
+              ),
+              e('div', { style: { background: '#0d1117', padding: '10px', borderRadius: '6px', fontSize: '13px', lineHeight: '1.4' } }, scene.caption),
+              scene.objects && scene.objects.length > 0 && e('div', { style: { marginTop: '8px', display: 'flex', gap: '6px' } },
+                scene.objects.map((o, idx) => e('span', { key: idx, style: { background: '#21262d', border: '1px solid #388bfd', color: '#58a6ff', padding: '2px 8px', borderRadius: '12px', fontSize: '11px' } }, `${o.label} (${Math.round(o.conf*100)}%)`))
+              )
+            )
+          ),
+
+          // Right: 3D Viewport & Scrubber
+          e('div', { style: { display: 'flex', flexDirection: 'column', gap: '16px' } },
+            e('div', { className: 'panel' },
+              e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' } },
+                e('div', null,
+                  e('h3', null, 'Live 3D Point Cloud Viewport'),
+                  e('div', { style: { fontSize: '11px', color: '#7ee787' } }, `${points.length} Points Accumulated`)
+                ),
+                !activeSession
+                  ? e('button', { className: 'btn btn-green', onClick: startScan }, 'Start 3D Scan')
+                  : e('button', { className: 'btn btn-stop', style: { padding: '6px 12px', fontSize: '12px' }, onClick: stopScan }, 'Stop & Export (.ply)')
+              ),
+              e('canvas', { ref: canvasRef, width: 600, height: 300, style: { width: '100%', height: '300px', display: 'block', borderRadius: '6px' } }),
+              e('div', { style: { marginTop: '12px', display: 'flex', alignItems: 'center', gap: '12px' } },
+                e('div', { style: { fontSize: '11px', color: '#8b949e' } }, 'Timeline Scrub:'),
+                e('input', { type: 'range', min: 0, max: 60, value: scrubSec, onChange: (ev) => setScrubSec(ev.target.value), style: { flex: 1 } }),
+                e('span', { style: { fontSize: '12px', fontFamily: 'monospace' } }, `${scrubSec}s`)
+              )
+            )
+          )
+        ),
+
+        // Bottom Controls
+        e('div', { className: 'main-grid' },
+          // Mode buttons
+          e('div', { className: 'panel' },
+            e('h3', null, 'Flight Controls & Modes'),
+            e('div', { style: { display: 'flex', gap: '8px', marginBottom: '12px' } },
+              e('button', { className: 'btn btn-green', onClick: takeoff }, 'Takeoff (Arm Token)'),
+              e('button', { className: 'btn btn-gray', onClick: land }, 'Land'),
+              e('button', { className: 'btn btn-blue', onClick: rth }, 'RTH'),
+              e('button', { className: 'btn btn-gray', onClick: releaseToRc }, 'Release to RC')
+            ),
+            e('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '8px' } },
+              ['narrate', 'sentinel', 'follow', 'orbit', 'indoor_grid', 'outdoor_box', 'manual_sidecar'].map(m =>
+                e('button', { key: m, className: `mode-btn ${status.mode === m ? 'active' : ''}`, onClick: () => setFlightMode(m) },
+                  e('div', { style: { fontWeight: 'bold' } }, m),
+                  e('div', { style: { fontSize: '10px', color: '#8b949e', marginTop: '2px' } }, 'Verified Mode')
+                )
+              )
+            )
+          ),
+
+          // Triggers
+          e('div', { className: 'panel' },
+            e('h3', null, 'Closed Enum Triggers'),
+            e('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+              triggers.map(t => e('div', { key: t.trigger_id, style: { background: '#21262d', padding: '6px 10px', borderRadius: '4px', fontSize: '12px' } },
+                `${t.name}: IF ${t.condition_type} == "${t.condition_value}" THEN ${t.action}`
+              ))
+            )
+          )
+        )
+      );
+    }
+
+    ReactDOM.render(e(App), document.getElementById('root'));
+  </script>
+</body>
+</html>

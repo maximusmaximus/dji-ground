@@ -1,0 +1,57 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Default Safe Flight Area",
+        "max_alt_m": 30.0
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.4194,
+              37.7749
+            ],
+            [
+              -122.4184,
+              37.7749
+            ],
+            [
+              -122.4184,
+              37.7759
+            ],
+            [
+              -122.4194,
+              37.7759
+            ],
+            [
+              -122.4194,
+              37.7749
+            ]
+          ]
+        ]
+      }
+    }
+  ],
+  "local_polygon": [
+    [
+      0.0,
+      0.0
+    ],
+    [
+      15.0,
+      0.0
+    ],
+    [
+      15.0,
+      15.0
+    ],
+    [
+      0.0,
+      15.0
+    ]
+  ]
+}
