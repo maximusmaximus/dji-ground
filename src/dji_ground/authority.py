@@ -79,6 +79,10 @@ class Authority:
         self.yaw: float = 0.0
         self.throttle: float = 0.0
 
+        # Estimated local position in meters relative to arming origin (ENU: x=East, y=North)
+        self.local_x: float = 0.0
+        self.local_y: float = 0.0
+
         # Geofence boundary vertices (local 2D coordinates [x, y])
         self.local_geofence: list[tuple[float, float]] = []
         self._load_geofence()
@@ -170,25 +174,43 @@ class Authority:
     # Geofence & Velocity Clamping
     # --------------------------------------------------------------------------
 
+    def integrate_position(self, vx: float, vy: float, dt: float) -> None:
+        """Integrate horizontal velocities into local ENU coordinate estimate."""
+        self.local_x += vx * dt
+        self.local_y += vy * dt
+
     def is_point_inside_geofence(self, x: float, y: float) -> bool:
-        """Ray-casting algorithm to test if coordinate is within polygon."""
+        """Point-in-polygon test (including edges) for local 2D coordinates."""
         poly = self.local_geofence
         if len(poly) < 3:
             return True
 
         n = len(poly)
+        eps = 1e-7
+
+        # Check if point lies directly on any boundary edge
+        for i in range(n):
+            p1x, p1y = poly[i]
+            p2x, p2y = poly[(i + 1) % n]
+            if (
+                min(p1x, p2x) - eps <= x <= max(p1x, p2x) + eps
+                and min(p1y, p2y) - eps <= y <= max(p1y, p2y) + eps
+            ):
+                cross = (x - p1x) * (p2y - p1y) - (y - p1y) * (p2x - p1x)
+                if abs(cross) <= 1e-5:
+                    return True
+
+        # Ray-casting algorithm for interior
         inside = False
         p1x, p1y = poly[0]
-        for i in range(n + 1):
+        for i in range(1, n + 1):
             p2x, p2y = poly[i % n]
-            if y > min(p1y, p2y):
-                if y <= max(p1y, p2y):
-                    if x <= max(p1x, p2x):
-                        if p1y != p2y:
-                            xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
-                        if p1x == p2x or x <= xinters:
-                            inside = not inside
+            if (p1y > y) != (p2y > y):
+                xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y + 1e-12) + p1x
+                if x < xinters:
+                    inside = not inside
             p1x, p1y = p2x, p2y
+
         return inside
 
     def clamp_velocity(
@@ -331,6 +353,9 @@ class Authority:
                 await asyncio.sleep(dt)
                 continue
 
+            # Update integrated local position from telemetry velocities
+            self.integrate_position(telem.vx, telem.vy, dt)
+
             # 2. Check battery level (< 20% triggers RTH)
             if (
                 telem.is_flying
@@ -375,7 +400,7 @@ class Authority:
 
                     # Geofence boundary check for translation
                     # If current position is near or outside boundary, zero translational sticks
-                    if not self.is_point_inside_geofence(telem.vx, telem.vy):
+                    if not self.is_point_inside_geofence(self.local_x, self.local_y):
                         self.pitch = self.roll = 0.0
                 except Exception:
                     self.pitch = self.roll = self.yaw = self.throttle = 0.0
@@ -406,6 +431,7 @@ class Authority:
             "longitude": telem.longitude,
             "heading_deg": telem.yaw,
             "velocities": {"vx": telem.vx, "vy": telem.vy, "vz": telem.vz},
+            "local_position": {"x": round(self.local_x, 2), "y": round(self.local_y, 2)},
             "sticks": {
                 "pitch": round(self.pitch, 2),
                 "roll": round(self.roll, 2),
