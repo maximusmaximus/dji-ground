@@ -4,6 +4,7 @@ import time
 from collections.abc import Callable
 
 from .authority import Authority
+from .mode_holds import indoor_grid_hold, orbit_hold, outdoor_box_hold
 from .scene import ScenePipeline
 from .triggers import TriggerEngine
 
@@ -111,6 +112,10 @@ class ModeManager:
 
         return controller
 
+    def get_orbit_hold(self) -> Callable[[], tuple[float, float, float, float]]:
+        """Return fail-closed zero-stick hold for orbit mode."""
+        return orbit_hold()
+
     # --------------------------------------------------------------------------
     # 5. Indoor Grid Mode: Lawnmower inside room polygon
     # --------------------------------------------------------------------------
@@ -132,6 +137,10 @@ class ModeManager:
 
         return controller
 
+    def get_indoor_grid_hold(self) -> Callable[[], tuple[float, float, float, float]]:
+        """Return fail-closed zero-stick hold for indoor grid mode."""
+        return indoor_grid_hold()
+
     # --------------------------------------------------------------------------
     # 6. Outdoor Box Mode: Perimeter rectangle inside geofence
     # --------------------------------------------------------------------------
@@ -146,6 +155,10 @@ class ModeManager:
             return (pitch, roll, yaw, throttle)
 
         return controller
+
+    def get_outdoor_box_hold(self) -> Callable[[], tuple[float, float, float, float]]:
+        """Return fail-closed zero-stick hold for outdoor box mode."""
+        return outdoor_box_hold()
 
     # --------------------------------------------------------------------------
     # 7. Manual Sidecar Mode: Accepts operator sticks from WebSocket
