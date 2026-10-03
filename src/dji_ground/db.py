@@ -1,6 +1,7 @@
 """SQLite persistence for triggers, snapshots, 3D modeling timelines, and audit logs."""
 
 import json
+import os
 import sqlite3
 import time
 from typing import Any
@@ -11,6 +12,8 @@ class SessionDB:
 
     def __init__(self, db_path: str = "dji_ground_session.sqlite") -> None:
         self.db_path = db_path
+        parent = os.path.dirname(os.path.abspath(db_path))
+        os.makedirs(parent, exist_ok=True)
         self._init_db()
 
     def _get_conn(self) -> sqlite3.Connection:

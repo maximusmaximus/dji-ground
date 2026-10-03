@@ -1,0 +1,9 @@
+{
+  "_comment": "Default local geofence in meters. The takeoff point is the origin (0,0), +x = East, +y = North. Edit local_polygon to match your flying area, or point DJI_GEOFENCE_FILE at your own file.",
+  "local_polygon": [
+    [-7.5, -7.5],
+    [7.5, -7.5],
+    [7.5, 7.5],
+    [-7.5, 7.5]
+  ]
+}

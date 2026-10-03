@@ -104,9 +104,9 @@ class Authority:
             except Exception:
                 pass
         if not self.local_geofence:
-            # Default indoor 15m box
-            box = self.settings.indoor_max_box
-            self.local_geofence = [(0.0, 0.0), (box, 0.0), (box, box), (0.0, box)]
+            # Default indoor box centred on the takeoff origin
+            half = self.settings.indoor_max_box / 2.0
+            self.local_geofence = [(-half, -half), (half, -half), (half, half), (-half, half)]
 
     async def start(self) -> None:
         """Start authority control loop."""
@@ -349,9 +349,23 @@ class Authority:
 
             # 1. Check bridge link status
             if not self.bridge.is_connected():
+                if self.state != FlightState.DISCONNECTED:
+                    self.pitch = self.roll = self.yaw = self.throttle = 0.0
+                    self._mode_controller_cb = None
+                    self.active_mode = FlightMode.HOVER if telem.is_flying else FlightMode.DISARMED
                 self.state = FlightState.DISCONNECTED
                 await asyncio.sleep(dt)
                 continue
+
+            if self.state == FlightState.DISCONNECTED:
+                # Link recovered: never resume a mode automatically.
+                self.pitch = self.roll = self.yaw = self.throttle = 0.0
+                if telem.is_flying:
+                    self.state = FlightState.EMERGENCY_HOVER
+                    self.active_mode = FlightMode.HOVER
+                else:
+                    self.state = FlightState.DISARMED
+                    self.active_mode = FlightMode.DISARMED
 
             # Update integrated local position from telemetry velocities
             self.integrate_position(telem.vx, telem.vy, dt)

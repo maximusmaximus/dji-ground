@@ -1,25 +1,13 @@
 {
-  "name": "dji-flight-agent",
-  "model": "llama-3.3-70b",
-  "provider": {
-    "name": "venice",
-    "base_url": "https://api.venice.ai/api/v1",
-    "api_key_env": "VENICE_API_KEY"
-  },
-  "mcp_servers": {
+  "_comment": "Generic MCP-client JSON (Claude Desktop / Cursor style). Hermes Agent uses deploy/hermes/config.yaml instead. Start `uv run dji-station --enable-3d` first.",
+  "mcpServers": {
     "dji-ground": {
-      "command": "python",
-      "args": [
-        "-m",
-        "dji_ground.mcp_server",
-        "--enable-3d-modeling"
-      ],
-      "env": {
-        "DJI_ENABLE_3D_MODELING": "true",
-        "PYTHONPATH": "src"
-      }
+      "url": "http://127.0.0.1:8000/mcp"
+    },
+    "dji-ground-stdio-alternative": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/dji-ground", "run", "dji-ground", "--enable-3d-modeling"],
+      "disabled": true
     }
-  },
-  "soul": "deploy/hermes/SOUL.md",
-  "skills_dir": "deploy/hermes/skills"
+  }
 }

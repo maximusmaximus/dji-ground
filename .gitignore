@@ -52,8 +52,8 @@ web/dist/*
 !web/dist/index.html
 web/.vite/
 
-# 3D models output directory
-data/models_3d/
+# Runtime data: session DB + 3D model exports
+data/
 *.ply
 *.gltf
 *.glb

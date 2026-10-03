@@ -1,37 +1,50 @@
-# Telegram Operator Bridge Setup
+# Telegram operator bot
 
-The Telegram operator bridge connects a Telegram chat with the `dji-ground` FastMCP authority and uses Venice AI for natural language command processing.
+The operator bot is a thin client of the running `dji-station` gateway. It long-polls Telegram,
+refuses everyone who is not on `TELEGRAM_ALLOWED_USERS` (an **empty list refuses everyone**),
+and never mints a motion token on its own. Motion only happens when an allow-listed human sends
+`/confirm_scan <item>`.
 
-## Prerequisites
-1. **Telegram Bot Token**: Create a bot via [@BotFather](https://t.me/BotFather) and copy the HTTP API token.
-2. **Your Telegram User ID**: Find your numeric user ID using [@userinfobot](https://t.me/userinfobot) to set up the whitelist.
-3. **Venice AI API Key**: Get an API key from [Venice AI](https://venice.ai).
+The code lives in [`src/dji_ground/telegram_bot.py`](../../src/dji_ground/telegram_bot.py);
+`bot.py` here is a back-compat shim.
 
 ## Setup
-Add the variables to your `.env` file:
-```bash
-TELEGRAM_BOT_TOKEN="your_bot_token"
-TELEGRAM_ALLOWED_USERS="123456789,987654321"  # Whitelist numeric user IDs
-VENICE_API_KEY="your_venice_api_key"
-VENICE_API_BASE="https://api.venice.ai/api/v1"
-VENICE_MODEL="llama-3.3-70b"
-```
 
-## Running the Bot
-Make sure the `dji-ground` gateway is running:
-```bash
-python -m dji_ground.gateway
-```
+1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token.
+2. Get your numeric user id from [@userinfobot](https://t.me/userinfobot).
+3. In the repo `.env`:
 
-Then in a second terminal:
-```bash
-python deploy/telegram/bot.py
-```
+   ```bash
+   TELEGRAM_BOT_TOKEN=123456789:AA...
+   TELEGRAM_ALLOWED_USERS=111111111            # comma-separated for several pilots
+   VENICE_API_KEY=...                          # optional: free-text copilot replies
+   ```
 
-## Operator Commands
-- `/status`: Real-time flight status, battery, altitude, and video health.
-- `/preflight`: Run automated sensor and safety check.
-- `/describe`: Query camera viewport and receive visual scene caption and objects.
-- `/scan <target>`: Trigger "Find item X and 3D model it" autonomous orbit scan.
-- `/stop`: **Unconditional emergency stop**. Bypasses LLM reasoning and halts motion within <100ms.
-- Any natural language message: Processed by Hermes + Venice AI.
+4. Check, then run (one process, one flight authority):
+
+   ```bash
+   uv run dji-station --check --telegram
+   uv run dji-station --telegram --enable-3d
+   ```
+
+   Or run the bot separately against an already-running station:
+   `uv run dji-telegram` (uses `DJI_GATEWAY_URL`, default `http://127.0.0.1:8000`).
+
+> One bot token can only be polled by one process. If you also run the Hermes Agent Telegram
+> gateway, give Hermes its **own** bot token, otherwise Telegram returns 409 Conflict.
+
+## Commands
+
+| Command | Effect |
+| :--- | :--- |
+| `/status` | State, mode, battery, altitude, video age, bridge, mission progress |
+| `/preflight` | Preflight checklist (lists failing checks) |
+| `/photo` | Latest FPV frame |
+| `/describe` | Scene caption (Venice VLM) + detected objects, with the frame |
+| `/scan <item>` | Find the item and **propose** an orbit 3D scan. Nothing moves. |
+| `/confirm_scan <item>` | You (PIC) authorise it: mints an orbit token and starts the scan. The aircraft must already be airborne and armed. |
+| `/models` | Recorded 3D models |
+| `/download <session_id>` | Sends the OBJ (or PLY/glTF) file |
+| `/land`, `/rth` | Land / return to home |
+| `/stop` (also `stop`, `abort`, `halt`) | Emergency stop: zero sticks and hover. Always works. |
+| any other text | Venice copilot answers in text. It can never fly. |

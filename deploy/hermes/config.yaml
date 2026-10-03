@@ -1,0 +1,24 @@
+# Hermes Agent snippet for ~/.hermes/config.yaml
+# Merge these keys into your existing file, then run:  hermes mcp test dji-ground
+#
+# Secrets do NOT go here. Put them in ~/.hermes/.env (see README section "Hermes + Venice + Telegram").
+
+# Venice as an OpenAI-compatible "custom" provider. Easiest: run `hermes model`, pick
+# "Custom endpoint", base URL https://api.venice.ai/api/v1, paste your Venice key, model below.
+model:
+  provider: custom
+  base_url: "https://api.venice.ai/api/v1"
+  default: "llama-3.3-70b"
+
+mcp_servers:
+  # RECOMMENDED: talk to the running `dji-station` over streamable HTTP.
+  # Hermes, the web UI and the operator Telegram bot then share ONE flight authority.
+  dji-ground:
+    url: "http://127.0.0.1:8000/mcp"
+
+  # ALTERNATIVE (no web UI): Hermes spawns the MCP server itself over stdio.
+  # Do NOT run this at the same time as dji-station against the same aircraft:
+  # that would create two flight authorities. Replace /path/to/dji-ground.
+  # dji-ground-stdio:
+  #   command: "uv"
+  #   args: ["--directory", "/path/to/dji-ground", "run", "dji-ground", "--enable-3d-modeling"]

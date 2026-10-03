@@ -2,6 +2,7 @@
 
 import base64
 import io
+import logging
 import time
 from abc import ABC, abstractmethod
 from typing import Any
@@ -9,6 +10,8 @@ from typing import Any
 import httpx
 import numpy as np
 from PIL import Image
+
+logger = logging.getLogger(__name__)
 
 
 class BaseDetector(ABC):
@@ -141,7 +144,7 @@ class VeniceVLMClient(BaseVLMClient):
         self,
         api_key: str,
         base_url: str = "https://api.venice.ai/api/v1",
-        model: str = "qwen-2.5-vl-72b",
+        model: str = "qwen3-vl-235b-a22b",
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url
@@ -181,8 +184,14 @@ class VeniceVLMClient(BaseVLMClient):
                 if res.status_code == 200:
                     data = res.json()
                     return data["choices"][0]["message"]["content"].strip()
-        except Exception:
-            pass
+                logger.warning(
+                    "Venice VLM request failed (HTTP %s, model=%s): %s",
+                    res.status_code,
+                    self.model,
+                    res.text[:200],
+                )
+        except Exception as exc:
+            logger.warning("Venice VLM request error (model=%s): %s", self.model, exc)
         return "Scene visible with primary camera; VLM API fallback."
 
 

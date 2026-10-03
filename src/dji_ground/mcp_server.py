@@ -4,7 +4,9 @@ import argparse
 import asyncio
 import base64
 import io
+import logging
 import os
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastmcp import FastMCP
@@ -13,7 +15,7 @@ from PIL import Image
 from .authority import Authority
 from .bridge.fake import FakeBridge
 from .bridge.opendji import OpenDJIBridge
-from .config import Settings, get_settings
+from .config import FIXTURES_DIR, Settings, get_settings
 from .db import SessionDB
 from .modeling_3d import ReconstructionEngine3D
 from .modes import ModeManager
@@ -23,8 +25,29 @@ from .screen import ScreenCapturer
 from .triggers import TriggerEngine
 from .video import VideoPipeline
 
+logger = logging.getLogger("dji_ground")
+
+SAMPLE_FRAME_PATH = str(FIXTURES_DIR / "sample_frame.jpg")
+SAMPLE_VIDEO_PATH = str(FIXTURES_DIR / "sample_h264_stream.h264")
+
+# Runtime ownership: only the context that actually started the runtime stops it.
+_runtime_started: bool = False
+_reconnect_task: asyncio.Task | None = None
+
+
+@asynccontextmanager
+async def _mcp_lifespan(_server: FastMCP):
+    """Start bridge, video, and the safety loop on the MCP server's own event loop."""
+    started_here = await start_runtime()
+    try:
+        yield {}
+    finally:
+        if started_here:
+            await stop_runtime()
+
+
 # Global server instance
-mcp = FastMCP("dji-ground")
+mcp = FastMCP("dji-ground", lifespan=_mcp_lifespan)
 
 # Global subsystem holders
 _settings: Settings = get_settings()
@@ -43,12 +66,13 @@ def init_subsystems(enable_3d: bool | None = None) -> None:
     """Initialize authority, bridge, video, and vision subsystems."""
     global _bridge, _video, _screen, _scene, _triggers, _authority, _modes, _modeler, _settings
 
+    if enable_3d is not None:
+        _settings.enable_3d_modeling = enable_3d
+
     if _authority is not None:
         return
 
     _settings = get_settings()
-    if enable_3d is not None:
-        _settings.enable_3d_modeling = enable_3d
 
     # Bridge selection
     if _settings.bridge_mode == "opendji":
@@ -59,7 +83,7 @@ def init_subsystems(enable_3d: bool | None = None) -> None:
             command_port=_settings.command_port,
         )
     else:
-        _bridge = FakeBridge()
+        _bridge = FakeBridge(fixture_video_path=SAMPLE_VIDEO_PATH)
 
     _video = VideoPipeline(_bridge)
     _screen = ScreenCapturer()
@@ -88,6 +112,81 @@ def init_subsystems(enable_3d: bool | None = None) -> None:
     )
 
 
+async def _reconnect_loop() -> None:
+    """Keep retrying the bridge so the operator can plug the phone in after startup."""
+    while True:
+        await asyncio.sleep(_settings.bridge_reconnect_s)
+        if _bridge.is_connected():
+            continue
+        try:
+            if await _bridge.connect():
+                logger.info("Bridge connected (%s mode).", _settings.bridge_mode)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Bridge reconnect failed: %s", exc)
+
+
+async def start_runtime() -> bool:
+    """Connect the bridge and start video + authority loops. Idempotent.
+
+    Returns True only for the caller that actually started the runtime (the owner).
+    """
+    global _runtime_started, _reconnect_task
+    init_subsystems()
+    if _runtime_started:
+        return False
+    _runtime_started = True
+
+    connected = await _bridge.connect()
+    if not connected:
+        logger.warning(
+            "Bridge not reachable at %s:%s-%s (%s mode). Running DISCONNECTED and retrying "
+            "every %.0fs. Check the phone app and `adb forward` ports.",
+            _settings.bridge_host,
+            _settings.telemetry_port,
+            _settings.command_port,
+            _settings.bridge_mode,
+            _settings.bridge_reconnect_s,
+        )
+    await _video.start()
+    await _authority.start()
+    _reconnect_task = asyncio.create_task(_reconnect_loop())
+    return True
+
+
+async def stop_runtime() -> None:
+    """Stop loops and disconnect the bridge (zeroes sticks via Authority.stop)."""
+    global _runtime_started, _reconnect_task
+    if not _runtime_started:
+        return
+    if _reconnect_task:
+        _reconnect_task.cancel()
+        try:
+            await _reconnect_task
+        except asyncio.CancelledError:
+            pass
+        _reconnect_task = None
+    await _authority.stop()
+    await _video.stop()
+    await _bridge.disconnect()
+    _runtime_started = False
+
+
+def _modeling_disabled_response() -> dict[str, Any]:
+    return {
+        "status": "3d_modeling_disabled",
+        "message": (
+            "3D modeling is off. Restart with --enable-3d-modeling (MCP), "
+            "`dji-station --enable-3d`, or set DJI_ENABLE_3D_MODELING=true."
+        ),
+    }
+
+
+def _fallback_image() -> Image.Image:
+    if os.path.exists(SAMPLE_FRAME_PATH):
+        return Image.open(SAMPLE_FRAME_PATH)
+    return Image.new("RGB", (640, 480), color=(180, 200, 220))
+
+
 # ------------------------------------------------------------------------------
 # Core 20 MCP Tools (Exact Names Guaranteed)
 # ------------------------------------------------------------------------------
@@ -97,7 +196,13 @@ def init_subsystems(enable_3d: bool | None = None) -> None:
 def get_status() -> dict[str, Any]:
     """Retrieve full drone flight status, battery, telemetry, and authority state."""
     init_subsystems()
-    return _authority.get_status()
+    status = _authority.get_status()
+    status["bridge_mode"] = _settings.bridge_mode
+    status["modeling_3d_enabled"] = _settings.enable_3d_modeling
+    status["modeling_3d_active_session"] = _modeler.active_session_id if _modeler.is_active() else None
+    status["vlm"] = "venice" if _settings.venice_configured else "offline_stub"
+    status["mission_progress"] = _modes.mission_progress
+    return status
 
 
 @mcp.tool()
@@ -210,16 +315,11 @@ async def describe_scene(prompt: str = "") -> dict[str, Any]:
     telem = _bridge.get_latest_telemetry().to_dict()
 
     if not frame:
-        # Fallback to test image fixture
-        fixture_path = "fixtures/sample_frame.jpg"
-        if os.path.exists(fixture_path):
-            img = Image.open(fixture_path)
-            frame_id = 1
-            age_ms = 15.0
-        else:
-            img = Image.new("RGB", (640, 480), color=(180, 200, 220))
-            frame_id = 0
-            age_ms = PLACEHOLDER_AGE_MS
+        # No live video: caption a fallback image but report it as STALE so the
+        # authority's stale-video gate is never fooled by a placeholder.
+        img = _fallback_image()
+        frame_id = 0
+        age_ms = PLACEHOLDER_AGE_MS
     else:
         img = frame.image
         frame_id = frame.frame_id
@@ -233,6 +333,8 @@ async def describe_scene(prompt: str = "") -> dict[str, Any]:
         age_ms=age_ms,
         prompt=prompt if prompt else None,
     )
+    if not frame:
+        desc["source"] = "placeholder"
 
     # If 3D modeling active, feed frame into reconstruction engine
     if _modeler.is_active():
@@ -254,13 +356,7 @@ async def detect_objects(labels: list[str] | None = None) -> list[dict[str, Any]
     """Detect visual objects in camera viewport with labels, bounding boxes, and confidences."""
     init_subsystems()
     frame = await _video.get_latest_frame()
-    if not frame and os.path.exists("fixtures/sample_frame.jpg"):
-        img = Image.open("fixtures/sample_frame.jpg")
-    elif frame:
-        img = frame.image
-    else:
-        img = Image.new("RGB", (640, 480), color=(180, 200, 220))
-
+    img = frame.image if frame else _fallback_image()
     return _scene.detector.detect(img, filter_labels=labels)
 
 
@@ -270,7 +366,7 @@ async def set_baseline() -> dict[str, Any]:
     init_subsystems()
     curr_desc = await describe_scene()
     frame = await _video.get_latest_frame()
-    img = frame.image if frame else Image.open("fixtures/sample_frame.jpg")
+    img = frame.image if frame else _fallback_image()
     return _scene.set_baseline(img, curr_desc["caption"], curr_desc["objects"])
 
 
@@ -317,9 +413,14 @@ def arm_motion(mode: str) -> dict[str, Any]:
 async def set_mode(
     mode: str, token: str = "", params: dict[str, Any] | None = None
 ) -> dict[str, Any]:
-    """Engage one of the seven flight modes (narrate, sentinel, follow, orbit, indoor_grid, outdoor_box, manual_sidecar)."""
+    """Engage one of the seven flight modes (narrate, sentinel, follow, orbit, indoor_grid, outdoor_box, manual_sidecar).
+
+    Optional params: orbit {radius}, indoor_grid {width, depth, spacing}, outdoor_box {side},
+    follow {bbox}. Translating modes require a token from arm_motion(<mode>).
+    """
     init_subsystems()
     mode_clean = mode.lower().strip()
+    p = params or {}
 
     # Assign matching controller
     cb = None
@@ -328,16 +429,19 @@ async def set_mode(
     elif mode_clean == "sentinel":
         cb = _modes.get_sentinel_controller()
     elif mode_clean == "follow":
-        if params and "bbox" in params:
-            _modes.set_follow_target(params["bbox"])
+        if "bbox" in p:
+            _modes.set_follow_target(p["bbox"])
         cb = _modes.get_follow_controller()
     elif mode_clean == "orbit":
-        radius = params.get("radius", 3.0) if params else 3.0
-        cb = _modes.get_orbit_controller(radius=radius)
+        cb = _modes.get_orbit_controller(radius=float(p.get("radius", 3.0)))
     elif mode_clean == "indoor_grid":
-        cb = _modes.get_indoor_grid_controller()
+        cb = _modes.get_indoor_grid_controller(
+            width=float(p.get("width", 4.0)),
+            depth=float(p.get("depth", 4.0)),
+            spacing=float(p.get("spacing", 1.0)),
+        )
     elif mode_clean == "outdoor_box":
-        cb = _modes.get_outdoor_box_controller()
+        cb = _modes.get_outdoor_box_controller(side=float(p.get("side", 10.0)))
     elif mode_clean == "manual_sidecar":
         cb = _modes.get_manual_sidecar_controller()
 
@@ -348,13 +452,14 @@ async def set_mode(
 
 @mcp.tool()
 def get_mode() -> dict[str, Any]:
-    """Return currently active flight mode, state, and runtime parameters."""
+    """Return currently active flight mode, state, runtime parameters, and mission progress."""
     init_subsystems()
     return {
         "active_mode": _authority.active_mode.value,
         "state": _authority.state.value,
         "params": _authority.mode_params,
         "geofence_points": len(_authority.local_geofence),
+        "mission_progress": _modes.mission_progress,
     }
 
 
@@ -367,6 +472,8 @@ def get_mode() -> dict[str, Any]:
 def start_3d_scan(target_label: str = "", resolution: str = "high") -> dict[str, Any]:
     """Start live 3D reconstruction session accumulating synchronized point clouds."""
     init_subsystems()
+    if not _settings.enable_3d_modeling:
+        return _modeling_disabled_response()
     session_id = _modeler.start_session(
         target_label=target_label if target_label else None,
         resolution=resolution,
@@ -376,7 +483,7 @@ def start_3d_scan(target_label: str = "", resolution: str = "high") -> dict[str,
 
 @mcp.tool()
 def stop_3d_scan() -> dict[str, Any]:
-    """Stop active 3D scanning session and export point cloud to PLY file."""
+    """Stop active 3D scanning session and export point cloud to PLY, OBJ, and GLTF files."""
     init_subsystems()
     return _modeler.stop_session()
 
@@ -404,6 +511,9 @@ async def scan_target_object(
     the scan and matched bounding box but refuses to self-arm motion.
     """
     init_subsystems()
+    if not _settings.enable_3d_modeling:
+        return _modeling_disabled_response()
+
     # 1. Search viewport for target
     objs = await detect_objects(labels=[target_label])
     matched = None
@@ -423,16 +533,16 @@ async def scan_target_object(
             "message": f"Target '{target_label}' was not visible in current camera viewport.",
         }
 
-    # 2. Start 3D scan session
-    session_id = _modeler.start_session(target_label=target_label, resolution="high")
-
-    # 3. Engage orbit mode around target using operator confirm_token
+    # 2. Engage orbit first: if the token is rejected, no scan session is left dangling.
     await _authority.set_mode(
         "orbit",
         token=confirm_token,
         params={"target": target_label, "bbox": matched["bbox"], "radius": radius_m},
         controller_cb=_modes.get_orbit_controller(radius=radius_m),
     )
+
+    # 3. Start 3D scan session
+    session_id = _modeler.start_session(target_label=target_label, resolution="high")
 
     # 4. Capture initial frame
     desc = await describe_scene()
@@ -449,23 +559,20 @@ async def scan_target_object(
 
 
 def main() -> None:
-    """Entrypoint for running FastMCP server over stdio."""
+    """Entrypoint for running FastMCP server over stdio (HTTP is served by dji-station at /mcp)."""
     parser = argparse.ArgumentParser(description="dji-ground FastMCP server")
     parser.add_argument(
         "--enable-3d-modeling", action="store_true", help="Enable 3D modeling engine"
     )
     args, _ = parser.parse_known_args()
 
+    # stdout is the MCP protocol channel: keep all logs on stderr.
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
     init_subsystems(enable_3d=args.enable_3d_modeling or _settings.enable_3d_modeling)
 
-    # Connect bridge and start authority loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(_bridge.connect())
-    loop.run_until_complete(_video.start())
-    loop.run_until_complete(_authority.start())
-
-    # Run FastMCP stdio server
+    # Bridge, video, and the safety loop start inside the FastMCP lifespan so they run
+    # on the same event loop that serves tool calls.
     mcp.run(transport="stdio")
 
 

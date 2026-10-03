@@ -12,23 +12,28 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import mcp_server
+from . import __version__, mcp_server
+from .config import WEB_DIST_DIR
+
+# MCP over Streamable HTTP, served from this same process at /mcp so every client
+# (Hermes, web UI, Telegram) talks to ONE authority on ONE bridge connection.
+_mcp_http = mcp_server.mcp.http_app(path="/mcp")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize shared subsystems
-    mcp_server.init_subsystems()
-    await mcp_server._bridge.connect()
-    await mcp_server._video.start()
-    await mcp_server._authority.start()
-    yield
-    await mcp_server._authority.stop()
-    await mcp_server._video.stop()
-    await mcp_server._bridge.disconnect()
+    # The gateway starts the runtime first so it owns it; the MCP lifespan is then a no-op.
+    started_here = await mcp_server.start_runtime()
+    try:
+        async with _mcp_http.lifespan(app):
+            yield
+    finally:
+        if started_here:
+            await mcp_server.stop_runtime()
 
 
-app = FastAPI(title="dji-ground Gateway", lifespan=lifespan)
+app = FastAPI(title="dji-ground Gateway", version=__version__, lifespan=lifespan)
+app.router.routes.extend(_mcp_http.routes)
 
 # Allow CORS for local Vite dev server
 app.add_middleware(
@@ -68,6 +73,12 @@ class ScanRequest(BaseModel):
     resolution: str = "high"
 
 
+class ScanTargetRequest(BaseModel):
+    target_label: str
+    radius_m: float = 3.0
+    confirm_token: str | None = None
+
+
 # ------------------------------------------------------------------------------
 # REST Endpoints matching Authority & MCP tools
 # ------------------------------------------------------------------------------
@@ -80,6 +91,19 @@ async def video_mjpeg():
         mcp_server._video.generate_mjpeg_stream(),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
+
+
+@app.get("/api/health")
+def api_health():
+    """Lightweight readiness probe used by dji-station and the Telegram bot."""
+    mcp_server.init_subsystems()
+    return {
+        "ok": True,
+        "version": __version__,
+        "bridge_mode": mcp_server._settings.bridge_mode,
+        "bridge_connected": mcp_server._bridge.is_connected(),
+        "state": mcp_server._authority.state.value,
+    }
 
 
 @app.get("/api/status")
@@ -188,6 +212,19 @@ def api_stop_3d_scan():
     return mcp_server.stop_3d_scan()
 
 
+@app.post("/api/scan_target")
+async def api_scan_target(req: ScanTargetRequest):
+    """'Find X and 3D model it'. Without confirm_token this only proposes; it never self-arms."""
+    try:
+        return await mcp_server.scan_target_object(
+            req.target_label, radius_m=req.radius_m, confirm_token=req.confirm_token
+        )
+    except PermissionError as pe:
+        raise HTTPException(status_code=403, detail=str(pe))
+    except RuntimeError as re:
+        raise HTTPException(status_code=409, detail=str(re))
+
+
 @app.get("/api/3d_model/{session_id}")
 def api_get_3d_model(session_id: str):
     return mcp_server.get_3d_model(session_id)
@@ -257,30 +294,39 @@ async def ws_manual_stick(websocket: WebSocket):
     try:
         while True:
             text = await websocket.receive_text()
-            data = json.loads(text)
-            p = float(data.get("pitch", 0.0))
-            r = float(data.get("roll", 0.0))
-            y = float(data.get("yaw", 0.0))
-            th = float(data.get("throttle", 0.0))
+            try:
+                data = json.loads(text)
+                p = float(data.get("pitch", 0.0))
+                r = float(data.get("roll", 0.0))
+                y = float(data.get("yaw", 0.0))
+                th = float(data.get("throttle", 0.0))
+            except (ValueError, TypeError, AttributeError):
+                # Malformed packet: hold position, keep the socket alive.
+                mcp_server._modes.update_sidecar_sticks(0.0, 0.0, 0.0, 0.0)
+                continue
             mcp_server._modes.update_sidecar_sticks(p, r, y, th)
             mcp_server._authority.refresh_heartbeat()
     except WebSocketDisconnect:
+        pass
+    finally:
+        # Any exit (disconnect, error, cancellation) must leave the sticks centred.
         mcp_server._modes.update_sidecar_sticks(0.0, 0.0, 0.0, 0.0)
 
 
 # ------------------------------------------------------------------------------
 # Serve Web Frontend (if built)
 # ------------------------------------------------------------------------------
-web_dist_dir = os.path.join(os.path.dirname(__file__), "..", "..", "web", "dist")
-if os.path.exists(web_dist_dir):
-    app.mount("/", StaticFiles(directory=web_dist_dir, html=True), name="static")
+if WEB_DIST_DIR.exists():
+    app.mount("/", StaticFiles(directory=str(WEB_DIST_DIR), html=True), name="static")
 
 
 def main() -> None:
-    """Run FastAPI gateway via uvicorn."""
-    import uvicorn
+    """Run the gateway (alias of `dji-station --no-browser`)."""
+    import sys
 
-    uvicorn.run("dji_ground.gateway:app", host="0.0.0.0", port=8000, reload=False)
+    from .station import main as station_main
+
+    raise SystemExit(station_main(["--no-browser", *sys.argv[1:]]))
 
 
 if __name__ == "__main__":

@@ -1,6 +1,21 @@
 """Pytest configuration and shared test fixtures."""
+# ruff: noqa: E402  (environment must be pinned before dji_ground is imported)
 
-import pytest
+import os
+import tempfile
+
+# Hermetic tests: environment variables beat .env values in pydantic-settings, so pin
+# anything a developer's real .env could set before dji_ground.config is imported.
+_TEST_DATA = tempfile.mkdtemp(prefix="dji_ground_tests_")
+os.environ["DJI_BRIDGE_MODE"] = "fake"
+os.environ["DJI_ENABLE_3D_MODELING"] = "false"
+os.environ["DJI_SQLITE_DB_PATH"] = os.path.join(_TEST_DATA, "session.sqlite")
+os.environ["DJI_MODEL_3D_EXPORT_DIR"] = os.path.join(_TEST_DATA, "models_3d")
+os.environ["VENICE_API_KEY"] = ""
+os.environ["TELEGRAM_BOT_TOKEN"] = ""
+os.environ["TELEGRAM_ALLOWED_USERS"] = ""
+
+import pytest  # noqa: E402
 
 from dji_ground.authority import Authority
 from dji_ground.bridge.fake import FakeBridge
