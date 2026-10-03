@@ -193,6 +193,12 @@ def api_get_3d_model(session_id: str):
     return mcp_server.get_3d_model(session_id)
 
 
+@app.get("/api/3d_models")
+def api_list_3d_models(limit: int = 20):
+    """List recent 3D reconstruction sessions."""
+    return mcp_server._db.list_3d_sessions(limit=limit)
+
+
 @app.get("/api/3d_model/{session_id}/download/{file_format}")
 def api_download_3d_model(session_id: str, file_format: str):
     """Download 3D model file in PLY, OBJ, or GLTF format."""

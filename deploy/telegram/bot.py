@@ -1,10 +1,9 @@
 """Telegram bot operator bridge with Venice AI inference and Hermes MCP tools."""
 
 import asyncio
-import io
 import json
 import os
-import sys
+
 import httpx
 
 # Configuration
@@ -147,6 +146,38 @@ async def handle_command(chat_id: int, user_id: int, text: str) -> None:
             await send_telegram_msg(chat_id, f"🛰️ *3D Scan Initiated* for `{target}`.\nSession: `{res.json().get('session_id')}`\nOrbiting target to accumulate point cloud.")
             return
 
+    # List 3D models: /models
+    if cmd.startswith("/models"):
+        async with httpx.AsyncClient() as client:
+            res = await client.get(f"{GATEWAY_URL}/api/3d_models")
+            sessions = res.json() if res.status_code == 200 else []
+            if not sessions:
+                await send_telegram_msg(chat_id, "No 3D models recorded yet. Use `/scan <item>` to generate one.")
+            else:
+                lines = ["📦 *Stored 3D Models*:"]
+                for s in sessions[:5]:
+                    lines.append(f"• `{s['session_id']}`: {s['point_count']} points (`/download {s['session_id']}`)")
+                await send_telegram_msg(chat_id, "\n".join(lines))
+            return
+
+    # Download 3D model document: /download <session_id>
+    if cmd.startswith("/download"):
+        parts = cmd.split(" ", 1)
+        if len(parts) < 2:
+            await send_telegram_msg(chat_id, "Usage: `/download <session_id>`")
+            return
+        target_session = parts[1].strip()
+        export_dir = "./data/models_3d"
+        obj_file = os.path.join(export_dir, f"{target_session}.obj")
+        ply_file = os.path.join(export_dir, f"{target_session}.ply")
+        if os.path.exists(obj_file):
+            await send_telegram_doc(chat_id, obj_file, caption=f"📦 OBJ 3D Model ({target_session})")
+        elif os.path.exists(ply_file):
+            await send_telegram_doc(chat_id, ply_file, caption=f"📦 PLY Point Cloud ({target_session})")
+        else:
+            await send_telegram_msg(chat_id, f"Model file for session `{target_session}` not found on disk.")
+        return
+
     # Natural Language via Venice AI
     if VENICE_API_KEY:
         # Ask Venice LLM with system prompt
@@ -175,7 +206,7 @@ async def handle_command(chat_id: int, user_id: int, text: str) -> None:
 
     await send_telegram_msg(
         chat_id,
-        "Available commands:\n• `/status`\n• `/preflight`\n• `/describe`\n• `/scan <item>`\n• `/stop` (emergency)",
+        "Available commands:\n• `/status`\n• `/preflight`\n• `/photo`\n• `/describe`\n• `/scan <item>`\n• `/models`\n• `/download <session_id>`\n• `/stop` (emergency)",
     )
 
 

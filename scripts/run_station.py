@@ -2,8 +2,8 @@
 
 import argparse
 import os
-import sys
 import webbrowser
+
 import uvicorn
 
 from dji_ground.config import get_settings

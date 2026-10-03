@@ -31,3 +31,8 @@ async def test_gateway_status_and_emergency_stop():
         ui_res = await ac.get("/")
         assert ui_res.status_code == 200
         assert "DJI Ground Station" in ui_res.text
+
+        # 3D models list
+        models_res = await ac.get("/api/3d_models")
+        assert models_res.status_code == 200
+        assert isinstance(models_res.json(), list)

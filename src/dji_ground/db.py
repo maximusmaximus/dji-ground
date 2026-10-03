@@ -179,6 +179,19 @@ class SessionDB:
                 res["metadata"] = json.loads(res["metadata_json"])
             return res
 
+    def list_3d_sessions(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Return list of completed or in-progress 3D scan sessions."""
+        with self._get_conn() as conn:
+            rows = (
+                conn.cursor()
+                .execute(
+                    "SELECT session_id, start_time, end_time, point_count, file_path, resolution FROM models_3d ORDER BY start_time DESC LIMIT ?",
+                    (limit,),
+                )
+                .fetchall()
+            )
+            return [dict(r) for r in rows]
+
     def add_timeline_frame(
         self,
         session_id: str,

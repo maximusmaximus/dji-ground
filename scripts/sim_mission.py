@@ -1,8 +1,6 @@
 """Simulation mission: emulator + DJI Bridge App + DJI Assistant 2 simulator."""
 
 import asyncio
-import os
-import sys
 
 from dji_ground import mcp_server
 

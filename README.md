@@ -95,45 +95,116 @@ When enabled with `--enable-3d-modeling` or `DJI_ENABLE_3D_MODELING=true`, `dji-
 
 ---
 
-## 4. Setup & Quickstart
+## 4. Setup & Installation
 
 ### Prerequisites
 - Python 3.12+
 - `uv` (Fast Python package manager)
+- (Optional for physical flight) Android phone with USB debugging and DJI RC
 
 ```bash
-# Clone the repository
+# 1. Clone the repository
 git clone https://github.com/maximusmaximus/dji-ground.git
 cd dji-ground
 
-# Create virtual environment and install dependencies
+# 2. Create virtual environment and install package in editable mode
 uv venv
 uv pip install -e ".[dev]"
 
-# Copy environment template
+# 3. Copy environment template
 cp .env.example .env
 ```
 
 ### Running the Test Gate
-Verify the entire test suite without physical drone hardware:
+Verify the entire test gate (all 34 tests and ruff linter) locally without physical drone hardware:
 ```bash
 uv run pytest -v
-uv run ruff check src tests
+uv run ruff check src tests deploy scripts
 ```
-All 34 unit, integration, safety gate, and state machine tests pass green.
+All unit tests, integration pipelines, safety watchdog timers, geofence algorithms, and state machines will pass green in ~2 seconds.
 
 ---
 
-## 5. Lab & Flight Connection Paths
+## 5. How to Run
+
+`dji-ground` supports multiple execution modes depending on whether you are running the unified web dashboard, the FastMCP stdio server for an AI agent, the Telegram mobile bridge, or standalone test missions.
+
+### Option 1: Unified Ground Station (Web Dashboard + REST API + WebSockets)
+Starts the single flight authority, video decode pipeline, telemetry socket, and browser UI:
+```bash
+# Using the installed CLI entrypoint:
+uv run dji-station
+
+# Or directly with python:
+uv run python scripts/run_station.py --enable-3d
+```
+Options:
+- `--port 8000`: Set HTTP/WebSocket gateway port.
+- `--host 0.0.0.0`: Bind to network interfaces.
+- `--enable-3d`: Enable real-time 3D point cloud accumulation and GLTF/OBJ/PLY export.
+- `--opendji`: Connect to live OpenDJI bridge over ADB forward ports.
+- `--no-browser`: Do not auto-launch browser tab.
+
+Open **`http://localhost:8000/`** to view:
+- **FPV Video Stream**: Low-latency H.264 decoded feed with HUD overlay.
+- **Flight Authority HUD**: Current state, mode, battery %, altitude, and watchdog heartbeat.
+- **Mode Selector**: Engage any of the 7 flight modes (translating modes require token confirmation).
+- **Interactive 3D Viewport**: Real-time point cloud viewer with orbit/pan/zoom controls.
+- **Timeline Scrubber**: Scrub backwards and forwards across flight time to inspect reconstructed geometry and pose slices.
+- **HTML5 Gamepad Controller**: Plug in a USB or Bluetooth controller (e.g. Xbox, DualShock) to fly virtual sticks in `manual_sidecar` mode.
+
+### Option 2: FastMCP Server (Hermes Agent / Claude Desktop / Cursor)
+Exposes the flight authority and 3D modeling tools over `stdio` to any Model Context Protocol (MCP) client:
+```bash
+uv run python -m dji_ground.mcp_server --enable-3d-modeling
+```
+The server exposes 24 tools under strict safety enforcement (see Section 8 for tool reference).
+
+### Option 3: Telegram Bot Operator Bridge
+Allows authenticated operators on mobile to receive telemetry, photos, 3D model files, and issue failsafe commands:
+```bash
+# 1. Start gateway in terminal A
+uv run dji-station
+
+# 2. Start Telegram bot bridge in terminal B
+uv run python deploy/telegram/bot.py
+```
+
+### Option 4: Automated Flight Missions
+Pre-packaged scripts demonstrating end-to-end flight sequences against the simulator or live hardware:
+```bash
+# 1. Basic simulation mission (preflight -> takeoff -> narrate -> land):
+uv run python scripts/sim_mission.py
+
+# 2. Autonomous 3D scan mission ("Find item X and 3D model it"):
+uv run python scripts/scan_target_mission.py "red_cone"
+
+# 3. Guarded indoor grid mission (requires explicit opt-in):
+INDOOR_ARM=1 uv run python scripts/indoor_mission.py
+
+# 4. Guarded outdoor geofenced box mission (requires explicit opt-in):
+OUTDOOR_ARM=1 uv run python scripts/outdoor_mission.py
+```
+
+### Option 5: Frontend Development (Optional)
+If you want to edit or rebuild the React + TypeScript frontend dashboard:
+```bash
+cd web
+npm install
+npm run build   # Builds production bundle to web/dist/
+npm run dev     # Starts Vite HMR dev server at http://localhost:5173/
+```
+
+---
+
+## 6. Lab & Flight Connection Paths
 
 ### Path A: Lab Simulation (No Drone Hardware)
-1. Launch Android Studio emulator with the **DJI Android Bridge App** installed.
-2. Connect DJI Assistant 2 (Consumer Drones Series) simulator to the virtual drone.
-3. Start `dji-ground`:
-   ```bash
-   uv run python -m dji_ground.gateway
-   ```
-4. Open the Web UI at `http://localhost:8000/`.
+1. By default, `DJI_BRIDGE_MODE=fake` connects to an internal physics simulator with deterministic aerodynamics and camera feed.
+2. For testing with Android DJI Bridge:
+   - Launch Android Studio emulator with the **DJI Android Bridge App** installed.
+   - Connect DJI Assistant 2 (Consumer Drones Series) simulator to the virtual drone.
+   - Start `dji-station`.
 
 ### Path B: Phone Flight Path (Live Aircraft)
 1. Connect Android phone to physical DJI Remote Controller (RC) via USB.
@@ -146,10 +217,11 @@ All 34 unit, integration, safety gate, and state machine tests pass green.
    ```
 4. Set `.env` to `DJI_BRIDGE_MODE=opendji`.
 5. For live flight clearance, set `INDOOR_ARM=1` or `OUTDOOR_ARM=1`.
+6. Maintain visual line of sight (VLOS) with hands on the physical RC sticks at all times.
 
 ---
 
-## 6. Hermes Agent & Venice AI Setup
+## 7. Hermes Agent & Venice AI Setup
 
 ### FastMCP Server Configuration (`~/.hermes/hermes.json` or MCP settings)
 ```json
@@ -190,7 +262,7 @@ VENICE_VISION_MODEL="qwen-2.5-vl-72b"
 
 ---
 
-## 7. Telegram Bot Operator Bridge
+## 8. Telegram Bot Operator Bridge
 
 The Telegram bot bridge allows authenticated operators to control and monitor flights from Telegram:
 
@@ -203,51 +275,55 @@ The Telegram bot bridge allows authenticated operators to control and monitor fl
    ```
 4. Start gateway and bot:
    ```bash
-   uv run python -m dji_ground.gateway
+   uv run dji-station
    uv run python deploy/telegram/bot.py
    ```
-5. Commands:
-   - `/status`: Flight health, battery, altitude, and video freshness.
-   - `/preflight`: Run automated sensor check.
-   - `/describe`: Receive visual scene description and detected objects.
-   - `/scan <item>`: Execute autonomous "find item X and 3D model it".
-   - `/stop`: **Unconditional emergency stop** (bypasses LLM reasoning).
+5. Available Commands:
+   - `/status`: Flight state, active mode, battery %, altitude, and video freshness.
+   - `/preflight`: Run automated sensor, battery, GPS, and geofence check.
+   - `/photo`: Capture and receive live high-resolution drone camera snapshot.
+   - `/describe`: Receive visual scene description, object detections, and photo overlay.
+   - `/scan <item>`: Execute autonomous "find item X and 3D model it" scan proposal.
+   - `/models`: List stored 3D reconstruction models.
+   - `/download <session_id>`: Download `.obj` or `.ply` 3D model directly to Telegram.
+   - `/stop`: **Unconditional emergency stop** (bypasses LLM reasoning; zeroes sticks instantly).
 
 ---
 
-## 8. MCP Tool Surface (Exact Names)
+## 9. MCP Tool Surface (Exact Names & Parameters)
 
 | Tool Name | Parameters | Description |
 | :--- | :--- | :--- |
 | `get_status` | None | Full status, battery, telemetry, and authority state |
 | `preflight_check` | None | Verify sensors, battery, geofence, and GPS lock |
-| `takeoff` | `token: str` | Command takeoff (requires arm token) |
+| `takeoff` | `token: str` | Command takeoff (requires server-minted arm token) |
 | `land` | `token: str = ""` | Auto-land at current coordinate |
 | `rth` | None | Command Return-To-Home |
 | `emergency_stop` | None | Immediate emergency stop / zero sticks |
 | `release_to_rc` | None | Relinquish control back to physical RC |
-| `get_latest_frame` | None | Base64 JPEG frame, timestamp, and age_ms |
+| `get_latest_frame` | None | Base64 JPEG frame, timestamp, and age_ms (fails closed if stale) |
 | `get_ui_screenshot` | None | Android ADB screen capture |
 | `get_osd_text` | None | Extracted OSD warning banners and flight status |
 | `describe_scene` | `prompt: str = ""` | VLM caption, objects, overlays, telemetry stamp |
-| `diff_scene` | `baseline_id: str = ""` | Difference between current scene and baseline |
+| `diff_scene` | `baseline_id: str = ""` | Difference between current scene and baseline snapshot |
 | `detect_objects` | `labels: list = None` | Bounding boxes, labels, and confidences |
-| `set_baseline` | None | Set current frame as reference baseline |
-| `set_trigger` | `trigger_def: dict` | Register trigger (enforces closed action enum) |
+| `set_baseline` | None | Set current frame as reference baseline snapshot |
+| `set_trigger` | `trigger_def: dict` | Register trigger rule (enforces closed action enum) |
 | `list_triggers` | None | List active triggers |
 | `clear_trigger` | `trigger_id: str` | Remove trigger rule |
-| `arm_motion` | `mode: str` | Mint server cryptographic token for motion |
+| `arm_motion` | `mode: str` | Mint server cryptographic token for motion (TTL lease) |
 | `set_mode` | `mode: str, token: str, params: dict` | Switch into one of 7 flight modes |
 | `get_mode` | None | Query active flight mode and parameters |
 | `start_3d_scan` | `target_label: str, resolution: str` | Start live 3D reconstruction session |
-| `stop_3d_scan` | None | Finalize 3D model and export `.ply` |
-| `get_3d_model` | `session_id: str` | Query 3D model metadata and point count |
-| `scan_target_object` | `target_label: str, radius_m: float` | "Find item X and 3D model it" workflow |
+| `stop_3d_scan` | None | Finalize 3D model and export `.ply`, `.obj`, and `.gltf` |
+| `get_3d_model` | `session_id: str` | Query 3D model metadata, point count, and bounds |
+| `scan_target_object` | `target_label: str, radius_m: float = 3.0, confirm_token: str = None` | "Find item X and 3D model it". Proposes scan; requires operator confirm token. |
 
 ---
 
-## 9. License & Safety Disclaimer
+## 10. License & Safety Disclaimer
 
 MIT License.
 
-**DISCLAIMER**: Autonomous aircraft operation carries inherent physical risks. Always comply with local civil aviation regulations (FAA Part 107, EASA, etc.). Maintain visual line of sight at all times. Keep hands on the physical RC sticks ready to take manual control.
+**DISCLAIMER**: Autonomous aircraft operation carries inherent physical risks. Always comply with local civil aviation regulations (FAA Part 107, EASA, etc.). Maintain visual line of sight (VLOS) at all times. The human operator holding the physical DJI Remote Controller is ALWAYS the Pilot in Command (PIC) and must keep hands on the sticks ready to take manual control.
+

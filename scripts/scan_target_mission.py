@@ -1,7 +1,6 @@
 """Autonomous 3D scan mission: Find item X, orbit POI, accumulate point cloud, export model."""
 
 import asyncio
-import os
 import sys
 
 from dji_ground import mcp_server
