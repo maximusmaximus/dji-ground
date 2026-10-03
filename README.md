@@ -87,8 +87,11 @@ When enabled with `--enable-3d-modeling` or `DJI_ENABLE_3D_MODELING=true`, `dji-
 - **Timeline Scrubber**: Scrub back and forth across flight time $[0, T]$ to view the drone position, camera snapshot, and point cloud accumulated up to that second.
 - **Autonomous Workflow**: "*Find item X and 3D model it*":
   - Detects target object $X$ in camera viewport.
-  - Locks centroid and mints an arming token for `orbit` mode.
-  - Circles the target, accumulates dense 3D slices, and exports `.ply` / `.gltf` model files.
+  - Returns proposal with matched bounding box requiring operator arming (`status: "requires_arm"`).
+  - Operator mints motion token via `arm_motion('orbit')`.
+  - Re-invokes with `confirm_token`, circles the target, accumulates dense 3D slices, and exports `.ply`, `.obj`, and `.gltf` model files.
+- **Fail-Closed Mode Holds**: If an autonomous mode does not have an active waypoint track or operator stick input, it defaults to zero-translation holds (`mode_holds.py`).
+- **Position-Integrated Geofencing**: Tracks estimated local ENU coordinates `(local_x, local_y)` through velocity integration over time, preventing runaway motion outside the geofence boundary.
 
 ---
 
@@ -112,11 +115,12 @@ cp .env.example .env
 ```
 
 ### Running the Test Gate
-Verify the entire test suite without any physical drone or hardware:
+Verify the entire test suite without physical drone hardware:
 ```bash
 uv run pytest -v
+uv run ruff check src tests
 ```
-All 26 unit, integration, and state machine tests pass green.
+All 34 unit, integration, safety gate, and state machine tests pass green.
 
 ---
 
